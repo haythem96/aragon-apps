@@ -47,65 +47,68 @@ retryEvery(retry => {
   })
 })
 
-async function initialize(tokenAddr) {
-  const token = app.external(tokenAddr, tokenAbi)
+async function initialize(tokenAddress) {
+  const token = app.external(tokenAddress, tokenAbi)
+  console.log('tokenAddress', tokenAddress)
+
+  return app.store(
+    async (state, { address, event, returnValues }) => {
+      let nextState = {
+        ...state,
+      }
+      console.log(`nextState ${event}`, nextState)
+      // if (event === INITIALIZATION_TRIGGER) {
+      //   nextState = {
+      //     ...nextState,
+      //     tokenAddressess: tokenAddress,
+      //     maxAccountTokens: await app.call('maxAccountTokens').toPromise(),
+      //   }
+      // }
+      if (addressesEqual(address, tokenAddress)) {
+        switch (event) {
+          case 'ClaimedTokens':
+            if (addressesEqual(returnValues._token, tokenAddress)) {
+              return claimedTokens(token, nextState, returnValues)
+            }
+            return nextState
+          case 'Transfer':
+            return transfer(token, nextState, returnValues)
+          default:
+            return nextState
+        }
+      } else {
+        // TODO: add handlers for the vesting events from token Manager
+      }
+    },
+    {
+      // Merge in the token's events into the app's own events for the store
+      events: [token.events()],
+      // externals: [token]
+      init: initState({ token, tokenAddress }),
+    }
+  )
+}
+
+const initState = ({ token, tokenAddress }) => async () => {
   try {
     const tokenSymbol = await token.symbol().toPromise()
     app.identify(tokenSymbol)
   } catch (err) {
     console.error(
-      `Failed to load token symbol for token at ${tokenAddr} due to:`,
+      `Failed to load token symbol for token at ${tokenAddress} due to:`,
       err
     )
   }
+  const tokenSettings = await loadTokenSettings(token)
+  const maxAccountTokens = await app.call('maxAccountTokens').toPromise()
 
-  return createStore(token, tokenAddr)
-}
-
-// Hook up the script as an aragon.js store
-async function createStore(token, tokenAddr) {
-  return app.store(
-    async (state, { address, event, returnValues }) => {
-      let nextState = {
-        ...state,
-        // Fetch the app's settings, if we haven't already
-        ...(!hasLoadedTokenSettings(state)
-          ? await loadTokenSettings(token)
-          : {}),
-      }
-
-      if (event === INITIALIZATION_TRIGGER) {
-        nextState = {
-          ...nextState,
-          tokenAddress: tokenAddr,
-          maxAccountTokens: await app.call('maxAccountTokens').toPromise(),
-        }
-      } else if (addressesEqual(address, tokenAddr)) {
-        switch (event) {
-          case 'ClaimedTokens':
-            if (addressesEqual(returnValues._token, tokenAddr)) {
-              nextState = await claimedTokens(token, nextState, returnValues)
-            }
-            break
-          case 'Transfer':
-            nextState = await transfer(token, nextState, returnValues)
-            break
-          default:
-            break
-        }
-      } else {
-        // TODO: add handlers for the vesting events from token Manager
-      }
-
-      return nextState
-    },
-    [
-      // Always initialize the store with our own home-made event
-      of({ event: INITIALIZATION_TRIGGER }),
-      // Merge in the token's events into the app's own events for the store
-      token.events(),
-    ]
-  )
+  const inititalState = {
+    tokenAddress,
+    maxAccountTokens,
+    ...tokenSettings,
+  }
+  console.log('initialState', inititalState)
+  return inititalState
 }
 
 /***********************
